@@ -32,6 +32,18 @@ internal sealed class AppSettings
     /// </summary>
     public string? SkippedUpdateVersion { get; set; }
 
+    /// <summary>
+    /// Copy the just-taken capture straight to the clipboard so it can be pasted immediately.
+    /// Uses the same payload shape as the gallery's Ctrl+C (image only).
+    /// </summary>
+    public bool CopyToClipboardAfterCapture { get; set; } = true;
+
+    /// <summary>
+    /// Pop the docked gallery after each capture. Turn off to let captures go straight to
+    /// disk (and the clipboard) with no window — avoids the gallery window flashing open every shot.
+    /// </summary>
+    public bool ShowGalleryAfterCapture { get; set; } = true;
+
     private static string DefaultCaptureFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Picky");
 

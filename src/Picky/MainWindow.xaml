@@ -161,6 +161,20 @@
                       Content="Start with Windows"
                       Checked="StartWithWindows_Changed"
                       Unchecked="StartWithWindows_Changed" />
+
+            <CheckBox Name="CopyToClipboardCheck"
+                      Style="{StaticResource DarkCheckBox}"
+                      Content="Copy capture to clipboard"
+                      Checked="CopyToClipboard_Changed"
+                      Unchecked="CopyToClipboard_Changed"
+                      Margin="0,10,0,0" />
+
+            <CheckBox Name="ShowGalleryCheck"
+                      Style="{StaticResource DarkCheckBox}"
+                      Content="Open gallery after each capture"
+                      Checked="ShowGallery_Changed"
+                      Unchecked="ShowGallery_Changed"
+                      Margin="0,10,0,0" />
             <TextBlock Name="StartupStatusText"
                        Foreground="{StaticResource Brush.TextTertiary}"
                        FontSize="11"

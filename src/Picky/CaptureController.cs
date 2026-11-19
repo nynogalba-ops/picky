@@ -1,6 +1,7 @@
 using System.Drawing.Imaging;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Picky.Native;
 
@@ -205,9 +206,49 @@ internal static class CaptureController
     {
         var savedPath = SaveCapture(bitmap);
 
+        // Copy to the clipboard first so the image is immediately pasteable, with or without
+        // the gallery popping. Mirrors the gallery's Ctrl+C payload (see GalleryWindow).
+        if (App.Settings.CopyToClipboardAfterCapture)
+        {
+            CopyImageToClipboard(savedPath);
+        }
+
         // Screenpresso-style: after saving, surface the gallery docked to the lower-right
-        // corner of the active monitor with the just-taken shot already selected.
-        ((App)System.Windows.Application.Current).ShowGalleryDocked(savedPath);
+        // corner of the active monitor with the just-taken shot already selected. Gated so the
+        // window doesn't flash open on every capture when the user doesn't want it.
+        if (App.Settings.ShowGalleryAfterCapture)
+        {
+            ((App)System.Windows.Application.Current).ShowGalleryDocked(savedPath);
+        }
+    }
+
+    /// <summary>
+    /// Puts the saved PNG on the clipboard as an image — the same single-representation payload the
+    /// gallery's Ctrl+C uses (CF_BITMAP plus a raw "PNG" stream so Electron/Chromium targets like
+    /// Kiro, Slack and Teams paste the real pixels and alpha, not a file path or re-encoded DIB).
+    /// </summary>
+    private static void CopyImageToClipboard(string path)
+    {
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad; // decode now, don't hold the file open
+            image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            image.UriSource = new Uri(path);
+            image.EndInit();
+            image.Freeze();
+
+            var data = new DataObject();
+            data.SetImage(image); // CF_BITMAP -> Windows synthesises CF_DIB / CF_DIBV5
+            data.SetData("PNG", new MemoryStream(File.ReadAllBytes(path)));
+
+            Clipboard.SetDataObject(data, copy: true);
+        }
+        catch
+        {
+            // Clipboard busy / undecodable — the file is still saved to disk, so just skip the copy.
+        }
     }
 
     private static string SaveCapture(Bitmap bitmap)

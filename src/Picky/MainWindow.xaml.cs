@@ -28,6 +28,33 @@ public partial class MainWindow : Window
         AccentHexInput.Text = AccentTheme.ToHex(AccentTheme.Current);
         BuildPenColors();
         InitStartWithWindows();
+
+        _initializing = true;
+        CopyToClipboardCheck.IsChecked = App.Settings.CopyToClipboardAfterCapture;
+        ShowGalleryCheck.IsChecked = App.Settings.ShowGalleryAfterCapture;
+        _initializing = false;
+    }
+
+    private void CopyToClipboard_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+        {
+            return;
+        }
+
+        App.Settings.CopyToClipboardAfterCapture = CopyToClipboardCheck.IsChecked == true;
+        App.Settings.Save();
+    }
+
+    private void ShowGallery_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+        {
+            return;
+        }
+
+        App.Settings.ShowGalleryAfterCapture = ShowGalleryCheck.IsChecked == true;
+        App.Settings.Save();
     }
 
     /// <summary>
