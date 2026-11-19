@@ -30,7 +30,7 @@ public partial class PreviewWindow : Window
     private readonly Bitmap _bitmap;
     private readonly string _savedPath;
 
-    private enum Tool { Select, Arrow, Rectangle, Text }
+    private enum Tool { Select, Arrow, Line, Rectangle, Ellipse, Pen, Text }
     private enum Manip { None, Resize, Rotate, Endpoint }
 
     private Tool _tool = Tool.Select;
@@ -42,7 +42,9 @@ public partial class PreviewWindow : Window
     private FontFamily _fontFamily = new("Bebas Neue");
 
     private readonly List<UIElement> _annotations = new();
+    // Endpoints of two-point shapes (arrows and plain lines); _plainLines marks the head-less ones.
     private readonly Dictionary<WpfPath, (Point from, Point to)> _arrowPoints = new();
+    private readonly HashSet<WpfPath> _plainLines = new();
     private readonly List<ToggleButton> _toolButtons;
 
     private bool _updatingToggles;
@@ -53,6 +55,7 @@ public partial class PreviewWindow : Window
     private bool _drawing;
     private Point _start;
     private WpfShape? _active;
+    private PolyLineSegment? _penSegment; // free-draw stroke being extended
 
     // Drag-to-size a text box (its height becomes the font size).
     private bool _textDragging;
@@ -96,6 +99,28 @@ public partial class PreviewWindow : Window
     private const double SnapAngleDegrees = 45;
 
     private static bool ShiftHeld => (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+    private static bool AltHeld => (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+
+    /// <summary>
+    /// Ellipse bounds for a drag from <paramref name="start"/> to <paramref name="p"/>.
+    /// Shift makes it a circle; Alt makes <paramref name="start"/> the centre instead of a corner.
+    /// </summary>
+    private static Rect EllipseBox(Point start, Point p)
+    {
+        double dx = p.X - start.X;
+        double dy = p.Y - start.Y;
+
+        if (ShiftHeld)
+        {
+            double side = Math.Max(Math.Abs(dx), Math.Abs(dy));
+            dx = dx < 0 ? -side : side;
+            dy = dy < 0 ? -side : side;
+        }
+
+        return AltHeld
+            ? new Rect(start.X - Math.Abs(dx), start.Y - Math.Abs(dy), 2 * Math.Abs(dx), 2 * Math.Abs(dy))
+            : new Rect(start, new Point(start.X + dx, start.Y + dy));
+    }
 
     /// <summary>
     /// Projects <paramref name="to"/> onto the nearest 45° ray from <paramref name="from"/>, keeping
@@ -228,7 +253,7 @@ public partial class PreviewWindow : Window
             _color = new SolidColorBrush(defaultColor);
         }
 
-        _toolButtons = new List<ToggleButton> { RectTool, ArrowTool, TextTool, SelectTool };
+        _toolButtons = new List<ToggleButton> { RectTool, EllipseTool, ArrowTool, LineTool, PenTool, TextTool, SelectTool };
         BuildSwatches();
         BuildFonts();
 
@@ -276,7 +301,16 @@ public partial class PreviewWindow : Window
         return image;
     }
 
+    /// <summary>Two-point shape (arrow or line), edited with endpoint handles.</summary>
     private bool IsArrow(UIElement? el) => el is WpfPath p && _arrowPoints.ContainsKey(p);
+
+    /// <summary>Arrow with a filled head (as opposed to a plain line or free-draw stroke).</summary>
+    private bool HasArrowHead(UIElement? el) => IsArrow(el) && !_plainLines.Contains((WpfPath)el!);
+
+    private static bool IsFillable(UIElement? el) => el is WpfRectangle or WpfEllipse;
+
+    private Geometry BuildEndpointGeometry(WpfPath path, Point from, Point to)
+        => _plainLines.Contains(path) ? BuildLine(from, to) : BuildArrow(from, to, path.StrokeThickness);
 
     // --- Toolbar / palette ---
 
@@ -342,7 +376,7 @@ public partial class PreviewWindow : Window
             if (el is WpfShape shape)
             {
                 shape.Stroke = brush;
-                if (shape is WpfPath || (shape is WpfRectangle rect && IsFilled(rect)))
+                if (HasArrowHead(shape) || (IsFillable(shape) && IsFilled(shape)))
                 {
                     shape.Fill = brush;
                 }
@@ -407,7 +441,10 @@ public partial class PreviewWindow : Window
         _tool = (string)chosen.Tag switch
         {
             "Arrow" => Tool.Arrow,
+            "Line" => Tool.Line,
             "Rectangle" => Tool.Rectangle,
+            "Ellipse" => Tool.Ellipse,
+            "Pen" => Tool.Pen,
             "Text" => Tool.Text,
             _ => Tool.Select,
         };
@@ -439,8 +476,8 @@ public partial class PreviewWindow : Window
     {
         UIElement? primary = _selection.Count == 1 ? _selection[0] : null;
         bool textCtx = primary is TextBlock || (_selection.Count == 0 && _tool == Tool.Text);
-        bool shapeCtx = primary is WpfShape || (_selection.Count == 0 && _tool is Tool.Arrow or Tool.Rectangle);
-        bool rectCtx = primary is WpfRectangle || (_selection.Count == 0 && _tool == Tool.Rectangle);
+        bool shapeCtx = primary is WpfShape || (_selection.Count == 0 && _tool is Tool.Arrow or Tool.Line or Tool.Rectangle or Tool.Ellipse or Tool.Pen);
+        bool rectCtx = IsFillable(primary) || (_selection.Count == 0 && _tool is Tool.Rectangle or Tool.Ellipse);
 
         ShapeGroup.Visibility = shapeCtx ? Visibility.Visible : Visibility.Collapsed;
         FillCheck.Visibility = rectCtx ? Visibility.Visible : Visibility.Collapsed;
@@ -461,7 +498,7 @@ public partial class PreviewWindow : Window
             if (el is WpfPath path && _arrowPoints.TryGetValue(path, out var pts))
             {
                 path.StrokeThickness = value;
-                path.Data = BuildArrow(pts.from, pts.to, value);
+                path.Data = BuildEndpointGeometry(path, pts.from, pts.to);
                 _dirty = true;
             }
             else if (el is WpfShape shape)
@@ -473,9 +510,9 @@ public partial class PreviewWindow : Window
         UpdateSelectionOverlay();
     }
 
-    /// <summary>Whether a rectangle is solid-filled (as opposed to a transparent outline).</summary>
-    private static bool IsFilled(WpfRectangle rect)
-        => rect.Fill is SolidColorBrush { Color.A: not 0 };
+    /// <summary>Whether a rectangle/ellipse is solid-filled (as opposed to a transparent outline).</summary>
+    private static bool IsFilled(WpfShape shape)
+        => shape.Fill is SolidColorBrush { Color.A: not 0 };
 
     private void Fill_Changed(object sender, RoutedEventArgs e)
     {
@@ -487,9 +524,9 @@ public partial class PreviewWindow : Window
         _fill = FillCheck.IsChecked == true;
         foreach (var el in _selection)
         {
-            if (el is WpfRectangle rect)
+            if (el is WpfShape shape && IsFillable(shape))
             {
-                rect.Fill = _fill ? _color : MediaBrushes.Transparent;
+                shape.Fill = _fill ? _color : MediaBrushes.Transparent;
                 _dirty = true;
             }
         }
@@ -554,6 +591,11 @@ public partial class PreviewWindow : Window
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        if (HandleModifierKey(e))
+        {
+            return;
+        }
+
         bool typing = _activeText is not null || Keyboard.FocusedElement is TextBox;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
         bool plain = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) == 0;
@@ -589,7 +631,10 @@ public partial class PreviewWindow : Window
                 e.Handled = true;
             }
             else if (plain && e.Key == Key.R) { RectTool.IsChecked = true; e.Handled = true; }
+            else if (plain && e.Key == Key.E) { EllipseTool.IsChecked = true; e.Handled = true; }
             else if (plain && e.Key == Key.A) { ArrowTool.IsChecked = true; e.Handled = true; }
+            else if (plain && e.Key == Key.L) { LineTool.IsChecked = true; e.Handled = true; }
+            else if (plain && e.Key == Key.P) { PenTool.IsChecked = true; e.Handled = true; }
             else if (plain && e.Key == Key.T) { TextTool.IsChecked = true; e.Handled = true; }
             else if (plain && e.Key == Key.V) { SelectTool.IsChecked = true; e.Handled = true; }
             else if (ctrl && e.Key == Key.W)
@@ -603,6 +648,40 @@ public partial class PreviewWindow : Window
         }
 
         base.OnKeyDown(e);
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        if (!HandleModifierKey(e))
+        {
+            base.OnKeyUp(e);
+        }
+    }
+
+    /// <summary>
+    /// Shift/Alt pressed or released mid-drag reshape the shape at once, without waiting for the
+    /// mouse to move. Alt is also swallowed while drawing so Windows doesn't enter system-menu mode.
+    /// </summary>
+    private bool HandleModifierKey(KeyEventArgs e)
+    {
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        bool alt = key is Key.LeftAlt or Key.RightAlt;
+        if (!alt && key is not (Key.LeftShift or Key.RightShift))
+        {
+            return false;
+        }
+
+        if (_drawing && _active is not null)
+        {
+            UpdateActiveShape(Mouse.GetPosition(AnnotationCanvas));
+        }
+
+        if (alt && _drawing)
+        {
+            e.Handled = true;
+            return true;
+        }
+        return false;
     }
 
     private void DeleteSelected()
@@ -643,6 +722,7 @@ public partial class PreviewWindow : Window
         if (element is WpfPath path)
         {
             _arrowPoints.Remove(path);
+            _plainLines.Remove(path);
         }
     }
 
@@ -752,17 +832,53 @@ public partial class PreviewWindow : Window
             AddAnnotation(rect);
             _active = rect;
         }
+        else if (_tool == Tool.Ellipse)
+        {
+            var ellipse = new WpfEllipse
+            {
+                Stroke = _color,
+                StrokeThickness = _thickness,
+                Fill = _fill ? _color : MediaBrushes.Transparent,
+            };
+            AddAnnotation(ellipse);
+            _active = ellipse;
+        }
+        else if (_tool == Tool.Pen)
+        {
+            _penSegment = new PolyLineSegment { IsSmoothJoin = true };
+            var figure = new PathFigure { StartPoint = start, IsFilled = false, IsClosed = false };
+            figure.Segments.Add(_penSegment);
+            var geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+
+            var stroke = new WpfPath
+            {
+                Stroke = _color,
+                StrokeThickness = _thickness,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Data = geometry,
+            };
+            AddAnnotation(stroke);
+            _active = stroke;
+        }
         else
         {
+            bool line = _tool == Tool.Line;
             var path = new WpfPath
             {
                 Stroke = _color,
-                Fill = _color,
+                Fill = line ? null : _color,
                 StrokeThickness = _thickness,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round,
                 StrokeLineJoin = PenLineJoin.Round,
             };
+            if (line)
+            {
+                _plainLines.Add(path);
+            }
             AddAnnotation(path);
             _active = path;
         }
@@ -821,6 +937,12 @@ public partial class PreviewWindow : Window
             return;
         }
 
+        UpdateActiveShape(p);
+    }
+
+    /// <summary>Reshapes the shape being drawn for the current mouse position and modifiers.</summary>
+    private void UpdateActiveShape(Point p)
+    {
         if (_active is WpfRectangle rect)
         {
             double x = Math.Min(_start.X, p.X);
@@ -829,10 +951,26 @@ public partial class PreviewWindow : Window
             rect.Height = Math.Abs(p.Y - _start.Y);
             SetElemMatrix(rect, new Matrix(1, 0, 0, 1, x, y));
         }
+        else if (_active is WpfEllipse ellipse)
+        {
+            var box = EllipseBox(_start, p);
+            ellipse.Width = box.Width;
+            ellipse.Height = box.Height;
+            SetElemMatrix(ellipse, new Matrix(1, 0, 0, 1, box.X, box.Y));
+        }
+        else if (_active is WpfPath stroke && _penSegment is not null)
+        {
+            var pts = _penSegment.Points;
+            var last = pts.Count > 0 ? pts[^1] : _start;
+            if ((p - last).Length >= 1)
+            {
+                pts.Add(p);
+            }
+        }
         else if (_active is WpfPath path)
         {
-            // Shift constrains a new arrow to 0/45/90/135/… while drawing.
-            path.Data = BuildArrow(_start, ShiftHeld ? SnapToAngle(_start, p) : p, _thickness);
+            // Shift constrains a new arrow/line to 0/45/90/135/… while drawing.
+            path.Data = BuildEndpointGeometry(path, _start, ShiftHeld ? SnapToAngle(_start, p) : p);
         }
     }
 
@@ -914,9 +1052,15 @@ public partial class PreviewWindow : Window
         }
 
         var end = e.GetPosition(AnnotationCanvas);
-        bool tiny = _active is WpfRectangle rect
-            ? rect.Width < 3 || rect.Height < 3
-            : (end - _start).Length < 5;
+        bool pen = _penSegment is not null;
+        _penSegment = null;
+
+        bool tiny = _active switch
+        {
+            WpfRectangle or WpfEllipse => _active.Width < 3 || _active.Height < 3,
+            WpfPath stroke when pen => stroke.Data.Bounds.Width < 2 && stroke.Data.Bounds.Height < 2,
+            _ => (end - _start).Length < 5,
+        };
 
         if (tiny)
         {
@@ -924,14 +1068,14 @@ public partial class PreviewWindow : Window
         }
         else
         {
-            if (_active is WpfPath path)
+            if (_active is WpfPath path && !pen)
             {
                 // Snap on commit as well. These stored endpoints drive the endpoint handles and any
-                // later re-render, so leaving them unsnapped would make the arrow jump off its clean
+                // later re-render, so leaving them unsnapped would make the shape jump off its clean
                 // angle the instant it gets selected.
                 var tip = ShiftHeld ? SnapToAngle(_start, end) : end;
                 _arrowPoints[path] = (_start, tip);
-                path.Data = BuildArrow(_start, tip, path.StrokeThickness);
+                path.Data = BuildEndpointGeometry(path, _start, tip);
             }
             SelectOnly(_active); // auto-select the freshly drawn object
         }
@@ -1245,7 +1389,7 @@ public partial class PreviewWindow : Window
             pts.to = local;
         }
         _arrowPoints[path] = pts;
-        path.Data = BuildArrow(pts.from, pts.to, path.StrokeThickness);
+        path.Data = BuildEndpointGeometry(path, pts.from, pts.to);
     }
 
     private void ApplyResize(Point mouseCanvas)
@@ -1305,9 +1449,9 @@ public partial class PreviewWindow : Window
         {
             SelectSwatchByBrush(shape.Stroke);
             SelectComboByValue(ThicknessCombo, shape.StrokeThickness);
-            if (shape is WpfRectangle rect)
+            if (IsFillable(shape))
             {
-                FillCheck.IsChecked = IsFilled(rect);
+                FillCheck.IsChecked = IsFilled(shape);
             }
         }
         else if (element is TextBlock text)
@@ -1342,6 +1486,20 @@ public partial class PreviewWindow : Window
                 return;
             }
         }
+    }
+
+    // A plain straight line between two points.
+    private static Geometry BuildLine(Point from, Point to)
+    {
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+        {
+            ctx.BeginFigure(from, false, false);
+            ctx.LineTo(to, true, false);
+        }
+
+        geometry.Freeze();
+        return geometry;
     }
 
     // A line shaft with a solid, filled triangular head.

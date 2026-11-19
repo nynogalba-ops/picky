@@ -53,8 +53,17 @@
             <StackPanel DockPanel.Dock="Left" Width="158" Margin="0,0,14,0">
                 <ToggleButton Name="RectTool" Content="▭  Rectangle" Style="{StaticResource ToolToggle}"
                               Tag="Rectangle" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
+                <ToggleButton Name="EllipseTool" Content="◯  Ellipse" Style="{StaticResource ToolToggle}"
+                              ToolTip="Ellipse  (E).  Shift: circle.  Alt: draw from the centre."
+                              Tag="Ellipse" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
                 <ToggleButton Name="ArrowTool" Content="↗  Arrow" Style="{StaticResource ToolToggle}"
                               Tag="Arrow" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
+                <ToggleButton Name="LineTool" Content="╱  Line" Style="{StaticResource ToolToggle}"
+                              ToolTip="Line  (L).  Shift: snap to 45°."
+                              Tag="Line" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
+                <ToggleButton Name="PenTool" Content="✎  Free draw" Style="{StaticResource ToolToggle}"
+                              ToolTip="Free draw  (P)"
+                              Tag="Pen" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
                 <ToggleButton Name="TextTool" Content="A  Text" Style="{StaticResource ToolToggle}"
                               Tag="Text" Checked="Tool_Checked" Unchecked="Tool_Unchecked" />
                 <ToggleButton Name="SelectTool" Content="⭶  Select" Style="{StaticResource ToolToggle}"
